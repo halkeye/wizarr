@@ -13,8 +13,6 @@ permissions:
 env:
     GHCR_REGISTRY: ghcr.io
     DH_REGISTRY: docker.io
-    IMAGE_NAME: wizarrrr/wizarr
-    # IMAGE_TAG: beta
 
 jobs:
     before_build:
@@ -88,6 +86,17 @@ jobs:
                   username: ${{ github.actor }}
                   password: ${{ secrets.GITHUB_TOKEN }}
 
+            - name: Extract metadata (tags, labels) for Docker
+              id: metadata
+              uses: docker/metadata-action@v5
+              with:
+                tags: |
+                  type=raw,value=${{ steps.tag.outputs.tag }}
+                  type=raw,value=${{ steps.release-branch.outputs.release_branch }}
+                images: |
+                  name=${{ env.DH_REGISTRY }}/${{ github.repository }},enable=${{ github.repository_owner == 'wizarrrr' }}
+                  name=${{ env.GHCR_REGISTRY }}/${{ github.repository }}
+
             # Build and push the image
             - name: Build and push by digest
               id: build
@@ -98,7 +107,9 @@ jobs:
                   push: true
                   platforms: ${{ matrix.platform }}
                   provenance: false
-                  outputs: type=image,name=${{ env.GHCR_REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true
+                  tags: ${{ steps.metadata.outputs.tags }}
+                  labels: ${{ steps.metadata.outputs.labels }}
+                  outputs: type=image,name=${{ env.GHCR_REGISTRY }}/${{ github.repository }},push-by-digest=true,name-canonical=true
 
             # Export the digest for later use
             - name: Export digest
@@ -164,6 +175,7 @@ jobs:
             # Login to Docker Hub
             - name: Login to Docker Hub
               uses: docker/login-action@v3
+              if: ${{ github.repository_owner == 'wizarrrr' }}
               with:
                   registry: ${{ env.DH_REGISTRY }}
                   username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -176,17 +188,23 @@ jobs:
               with:
                   strip_v: true
 
-            # Create manifest list and push
-            - name: Create manifest list and push to Registry
+            - name: Extract metadata (tags, labels) for Docker
+              id: metadata
+              uses: docker/metadata-action@v5
+              with:
+                tags: |
+                  type=raw,value=${{ steps.tag.outputs.tag }}
+                  type=raw,value=${{ steps.release-branch.outputs.release_branch }}
+                images: |
+                  name=${{ env.DH_REGISTRY }}/${{ github.repository }},enable=${{ github.repository_owner == 'wizarrrr' }}
+                  name=${{ env.GHCR_REGISTRY }}/${{ github.repository }}
+
+            - name: Create manifest list and push
               working-directory: /tmp/digests
               run: |
-                  docker buildx imagetools create \
-                    --tag ${{ env.GHCR_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.release-branch.outputs.release_branch }} \
-                    --tag ${{ env.GHCR_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }} \
-                    --tag ${{ env.DH_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.release-branch.outputs.release_branch }} \
-                    --tag ${{ env.DH_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }} \
-                    $(printf '${{ env.GHCR_REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:%s ' *)
+                docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+                  $(printf '${{ env.GHCR_REGISTRY }}/${{ github.repository }}@sha256:%s ' *)          
 
-            # Inspect image
             - name: Inspect image
-              run: docker buildx imagetools inspect ${{ env.GHCR_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.release-branch.outputs.release_branch }}
+              run: |
+                docker buildx imagetools inspect ${{ env.GHCR_REGISTRY }}/${{ github.repository }}:${{ steps.meta.outputs.version }}  
